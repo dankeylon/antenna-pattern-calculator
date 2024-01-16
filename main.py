@@ -1,3 +1,8 @@
+import matplotlib.pyplot as plt
+import numpy as np
+from Antenna_Phased_Array import linTodB, Array_Config, Array_2D, pi, getSLL
+
+
 def normal(array):
     
     return np.abs( array ) / np.max( np.abs( array ) )
@@ -172,7 +177,7 @@ if __name__ == '__main__':
     hor_normal = 2*linTodB( normal( hor ) )
     
     
-    
+    plt.show()
 
         
     # peaks = find_peaks(hor_normal)[0]

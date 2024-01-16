@@ -13,6 +13,8 @@ from scipy.integrate import quad, dblquad
 from scipy.special import binom
 from scipy.interpolate import interp1d, interp2d
 
+import numba as nb
+
 
 #dB Conversion
 def linTodB(a):
@@ -101,14 +103,22 @@ class Array_2D:
         x = self.elements["x"]
         y = self.elements["y"]
         w = self.elements["w"]
-        
+        """
         for idx in range(0, len(x) ):
             
             arg = self.k * np.sin(theta) * (x[idx] * np.cos(phi) + y[idx] * np.sin(phi) )
             mult = w[idx] * 1j * self.k * np.cos(theta) * ( x[idx] * np.cos(phi) + y[idx] * np.sin(phi) )
             
             dF += mult * np.exp(1j * arg)
-            
+        """
+        #out = np.array( [ [ np.array([theta_i, phi_j]) for phi_j in phi] for theta_i in theta])
+        def patt(x, y, w):
+            arg = self.k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
+            mult = w * 1j * self.k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
+            return mult * np.exp(1j * arg)
+        
+        dF = np.sum([patt(xi, yi, wi) for xi, yi, wi in zip(x, y, w)], axis=0)
+        # For Numba:  Reserve len(elements) Blocks and len(theta)*len(phi) threads per Block 
         return dF
     
     def dF_dPhi(self, theta, phi):
@@ -243,7 +253,7 @@ class Array_2D:
     
 class Array_Config:
     
-    def __init__(self, Nx, Ny, dx, dy, w = 1):
+    def __init__(self, Nx: int, Ny: int, dx: float, dy: float, w: float = 1.0):
         """
         Parameters
         ----------
