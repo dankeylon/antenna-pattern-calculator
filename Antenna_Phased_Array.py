@@ -13,7 +13,8 @@ from scipy.integrate import quad, dblquad
 from scipy.special import binom
 from scipy.interpolate import interp1d, interp2d
 
-import numba as nb
+from numba import cuda, njit
+import cmath as cm
 
 
 #dB Conversion
@@ -93,32 +94,99 @@ class Array_2D:
         for idx in range(0, len(x) ):
             
             arg = self.k * np.sin(theta) * ( x[idx] * np.cos(phi) + y[idx] * np.sin(phi) )
-            F = F + w[idx] * np.exp(1j * arg)
+            F += w[idx] * np.exp(1j * arg)
                         
         return F
-    def dF_dTheta(self, theta, phi):
-        
-        dF = 0
-        
+    
+    def dF_dTheta(self, theta, phi, device = "gpu"):
         x = self.elements["x"]
         y = self.elements["y"]
         w = self.elements["w"]
-        """
-        for idx in range(0, len(x) ):
-            
-            arg = self.k * np.sin(theta) * (x[idx] * np.cos(phi) + y[idx] * np.sin(phi) )
-            mult = w[idx] * 1j * self.k * np.cos(theta) * ( x[idx] * np.cos(phi) + y[idx] * np.sin(phi) )
-            
-            dF += mult * np.exp(1j * arg)
-        """
-        #out = np.array( [ [ np.array([theta_i, phi_j]) for phi_j in phi] for theta_i in theta])
-        def patt(x, y, w):
-            arg = self.k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
-            mult = w * 1j * self.k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
-            return mult * np.exp(1j * arg)
         
-        dF = np.sum([patt(xi, yi, wi) for xi, yi, wi in zip(x, y, w)], axis=0)
-        # For Numba:  Reserve len(elements) Blocks and len(theta)*len(phi) threads per Block 
+        # TODO: Intelligently decide based on manual selection, gpu availability, and projected t_calc (empirical)
+        if device == "gpu":
+            @cuda.jit 
+            def pattern(theta_p, phi_p, x_e, y_e, w_e, k, out): # TODO: Type Hints?
+                                        
+                block_idx = cuda.blockIdx.x   # block_idx corresponds to the current block index which scales with current element
+                thread_idx = cuda.threadIdx.x # thread_idx corresponds to the current thread index, thread_idx in [0, 1024]
+
+                x = complex(x_e[block_idx])
+                y = complex(y_e[block_idx])
+                w = complex(w_e[block_idx])
+                k_c = complex(k[0])
+
+                num_angles = len(theta_p)
+
+                for angle_idx in range(thread_idx, num_angles, cuda.blockDim.x):
+                    theta = complex(theta_p[angle_idx])
+                    phi = complex(phi_p[angle_idx])
+
+                    arg = k_c * cm.sin(theta) * (x * cm.cos(phi) + y * cm.sin(phi) )
+                    mult = w * 1.0j * k_c * cm.cos(theta) * ( x * cm.cos(phi) + y * cm.sin(phi) )
+                    out[block_idx * num_angles + angle_idx] = mult * cm.exp(1.0j * arg)
+
+            dev_theta = cuda.to_device(theta.flatten())
+            dev_phi = cuda.to_device(phi.flatten())
+            dev_x = cuda.to_device(x)
+            dev_y = cuda.to_device(y)
+            dev_w = cuda.to_device(w)
+            dev_k = cuda.to_device(np.array([self.k]))
+            out_shape = (len(x)*theta.shape[0]*theta.shape[1])
+            dev_out = cuda.device_array(out_shape, dtype=complex) # output from each block should be linear array the same length as theta
+                                                                  # output from each thread should set a single entry in out_shape
+                                                                  # final output should be shape: (n_elements*n_theta*n_phi,)
+
+            # TODO: Final product should intelligently rescale these to be powers of 2 and not exceed device limits
+            num_blocks = len(x)
+            num_threads = min(theta.shape[0] * theta.shape[1], 1024)
+            pattern[num_blocks, num_threads](dev_theta, dev_phi, dev_x, dev_y, dev_w, dev_k, dev_out)
+
+            cuda.synchronize()
+            out = dev_out.copy_to_host()
+
+            dF = np.sum(out.reshape(len(x), theta.shape[0], theta.shape[1]), axis=0)
+
+        elif device == "cpu_single":
+            # Perform all operations on a single CPU thread
+            def pattern(x, y, w):
+                arg = self.k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
+                mult = w * 1j * self.k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
+                return mult * np.exp(1j * arg)
+        
+            dF = np.sum([pattern(xi, yi, wi) for xi, yi, wi in zip(x, y, w)], axis=0)
+
+        elif device == "cpu_numba":
+            @njit(parallel=False)
+            def pattern(theta, phi, x_e, y_e, w_e, k):
+                dF = np.zeros(theta.shape, dtype=np.complex128)
+                mult = np.zeros(theta.shape, dtype=np.complex128)
+                arg = np.zeros(theta.shape, dtype=np.complex128)
+                for x, y, w in zip(x_e, y_e, w_e):
+                    arg = k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
+                    mult = w * 1j * k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
+                    dF += mult * np.exp(1j * arg)
+                return dF
+            
+            dF = pattern(theta, phi, x, y, w, self.k)
+
+        elif device == "cpu_multi":
+            # TODO: Either use the Numba CPU stuff here or joblib
+            @njit(parallel=True)
+            def pattern(theta, phi, x_e, y_e, w_e, k):
+                dF = np.zeros(theta.shape, dtype=np.complex128)
+                mult = np.zeros(theta.shape, dtype=np.complex128)
+                arg = np.zeros(theta.shape, dtype=np.complex128)
+                for x, y, w in zip(x_e, y_e, w_e):
+                    arg = k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
+                    mult = w * 1j * k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
+                    dF += mult * np.exp(1j * arg)
+                return dF
+            
+            dF = pattern(theta, phi, x, y, w, self.k)
+        
+
+
         return dF
     
     def dF_dPhi(self, theta, phi):
