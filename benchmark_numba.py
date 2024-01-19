@@ -67,10 +67,11 @@ if False:
     plt.show()
 
 
-if True:
+if False:
     # Iterate through a test matrix, run multiple iterations at each test point, average results
-    pattern_resolution = np.array([16, 32, 64, 128])
-    array_side_length =  np.array([2, 4, 8, 16, 32, 64])
+    pattern_resolution = np.array([64, 128, 256, 512, 1024])
+    array_side_length =  np.array([2, 4, 8, 16, 32])
+    assert len(pattern_resolution) == len(array_side_length)
     test_repeats = 5
 
     test_matrix_cpu       = np.zeros((len(pattern_resolution), len(array_side_length)))
@@ -109,10 +110,10 @@ if True:
                 test_point_score_cpu_numba += end-start
 
                 # Test CPU (Multi, Numba)
-                """ start = t.perf_counter()
+                start = t.perf_counter()
                 patt = radar_array.dF_dTheta(theta, phi, device = "cpu_multi")
                 end = t.perf_counter()
-                test_point_score_cpu_multi += end-start """
+                test_point_score_cpu_multi += end-start
 
                 # Test GPU
                 start = t.perf_counter()
@@ -122,20 +123,49 @@ if True:
                 end = t.perf_counter()
                 test_point_score_gpu += end-start
 
-
-
-
-            test_matrix_cpu[rdx, ldx] = round(test_point_score_cpu / test_repeats, 2)
-            test_matrix_cpu_numba[rdx, ldx] = round(test_point_score_cpu_numba / test_repeats, 2)
-            test_matrix_cpu_multi[rdx, ldx] = 0 # round(test_point_score_cpu_multi / test_repeats, 2)
-            test_matrix_gpu[rdx, ldx] = round(test_point_score_gpu / test_repeats, 2)
-            #print(f"Storing Averages {rdx}/{len(pattern_resolution)}")
+            test_matrix_cpu[rdx, ldx] = round(test_point_score_cpu / test_repeats, 6)
+            test_matrix_cpu_numba[rdx, ldx] = round(test_point_score_cpu_numba / test_repeats, 6)
+            test_matrix_cpu_multi[rdx, ldx] = round(test_point_score_cpu_multi / test_repeats, 6)
+            test_matrix_gpu[rdx, ldx] = round(test_point_score_gpu / test_repeats, 6)
 
     print("Writing Files")
     np.savetxt("test_matrix_cpu.csv", test_matrix_cpu)
     np.savetxt("test_matrix_cpu_numba.csv", test_matrix_cpu_numba)
     np.savetxt("test_matrix_cpu_multi.csv", test_matrix_cpu_multi)
     np.savetxt("test_matrix_gpu.csv", test_matrix_gpu)
+
+
+if True:
+    pattern_resolution = np.array([64, 128, 256, 512, 1024])
+    array_side_length =  np.array([2, 4, 8, 16, 32])
+
+    test_matrix_cpu       = np.loadtxt("test_matrix_cpu.csv")
+    test_matrix_cpu_numba = np.loadtxt("test_matrix_cpu_numba.csv")
+    test_matrix_cpu_multi = np.loadtxt("test_matrix_cpu_multi.csv")
+    test_matrix_gpu       = np.loadtxt("test_matrix_gpu.csv")
+
+
+    def plot_stuff(test_mat, name, ax = None):
+
+        if ax is None:
+            __, ax = plt.subplots(1,1)
+
+        plot_array = np.array([test_mat[idx, idx] for idx in range(0, len(test_mat))])
+        ax.plot(plot_array, label=name)
+        ax.legend()
+
+        return ax
+    
+    ax = plot_stuff(test_matrix_cpu, "CPU")
+    plot_stuff(test_matrix_cpu_numba, "CPU-Numba", ax = ax)
+    plot_stuff(test_matrix_cpu_multi, "CPU-Multi", ax = ax)
+    plot_stuff(test_matrix_gpu, "GPU", ax = ax)
+
+    plt.show()
+
+
+
+
 
 
 

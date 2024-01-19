@@ -12,8 +12,9 @@ from scipy.signal import chebwin, find_peaks
 from scipy.integrate import quad, dblquad
 from scipy.special import binom
 from scipy.interpolate import interp1d, interp2d
+from typing import Literal
 
-from numba import cuda, njit
+from numba import cuda, njit, prange
 import cmath as cm
 
 
@@ -98,10 +99,14 @@ class Array_2D:
                         
         return F
     
-    def dF_dTheta(self, theta, phi, device = "gpu"):
+    def dF_dTheta(self, theta, phi, device: Literal['cpu_single', 'cpu_numba', 'cpu_multi', 'gpu'] = "cpu_single"):
         x = self.elements["x"]
         y = self.elements["y"]
         w = self.elements["w"]
+
+        # Constrain Memory Usage to be below system limits
+        # item_size = np.dtype(dtype).itemsize
+        # total_elements = np.prod(shape)
         
         # TODO: Intelligently decide based on manual selection, gpu availability, and projected t_calc (empirical)
         if device == "gpu":
@@ -171,13 +176,16 @@ class Array_2D:
             dF = pattern(theta, phi, x, y, w, self.k)
 
         elif device == "cpu_multi":
-            # TODO: Either use the Numba CPU stuff here or joblib
             @njit(parallel=True)
             def pattern(theta, phi, x_e, y_e, w_e, k):
                 dF = np.zeros(theta.shape, dtype=np.complex128)
                 mult = np.zeros(theta.shape, dtype=np.complex128)
                 arg = np.zeros(theta.shape, dtype=np.complex128)
-                for x, y, w in zip(x_e, y_e, w_e):
+                for edx in prange(0, len(x_e)):
+                    x = x_e[edx]
+                    y = y_e[edx]
+                    w = w_e[edx]
+
                     arg = k * np.sin(theta) * (x * np.cos(phi) + y * np.sin(phi) )
                     mult = w * 1j * k * np.cos(theta) * ( x * np.cos(phi) + y * np.sin(phi) )
                     dF += mult * np.exp(1j * arg)
@@ -185,8 +193,6 @@ class Array_2D:
             
             dF = pattern(theta, phi, x, y, w, self.k)
         
-
-
         return dF
     
     def dF_dPhi(self, theta, phi):
